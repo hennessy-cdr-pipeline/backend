@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	generator "cdr_generator"
+	generator "github.com/hennessy-cdr-pipeline/backend/internal/generator"
 )
 
 func main() {
