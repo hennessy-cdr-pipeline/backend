@@ -46,10 +46,11 @@ func main() {
 }
 
 type subscriber struct {
-	msisdn string
-	imsi   string
-	mcc    string
-	mnc    string
+	msisdn  string
+	imsi    string
+	mcc     string
+	mnc     string
+	profile string
 }
 
 func loadSubscribers(path string) ([]subscriber, error) {
@@ -68,7 +69,7 @@ func loadSubscribers(path string) ([]subscriber, error) {
 	for i, name := range header {
 		columns[name] = i
 	}
-	for _, name := range []string{"msisdn", "imsi", "mcc", "mnc"} {
+	for _, name := range []string{"msisdn", "imsi", "mcc", "mnc", "profile"} {
 		if _, ok := columns[name]; !ok {
 			return nil, fmt.Errorf("в справочнике отсутствует колонка %q", name)
 		}
@@ -84,8 +85,10 @@ func loadSubscribers(path string) ([]subscriber, error) {
 			return nil, fmt.Errorf("прочитать строку %d справочника: %w", line, err)
 		}
 		get := func(name string) string { return row[columns[name]] }
-		item := subscriber{msisdn: get("msisdn"), imsi: get("imsi"), mcc: get("mcc"), mnc: get("mnc")}
-		if item.msisdn == "" || item.imsi == "" || item.mcc == "" || item.mnc == "" {
+		item := subscriber{
+			msisdn: get("msisdn"), imsi: get("imsi"), mcc: get("mcc"), mnc: get("mnc"), profile: get("profile"),
+		}
+		if item.msisdn == "" || item.imsi == "" || item.mcc == "" || item.mnc == "" || item.profile == "" {
 			return nil, fmt.Errorf("пустое обязательное поле в строке %d справочника", line)
 		}
 		result = append(result, item)
@@ -99,7 +102,8 @@ func newRecord(sequence int, subscribers []subscriber) generator.CDRRecord {
 	start := fieldStartTime(sequence)
 	entity := fieldRecordingEntity(sequence)
 	partial := fieldPartialType()
-	mcc, mnc := fieldMCC(served), fieldMNC(served)
+	roamingEvent := fieldIsRoamingEvent(typ, served)
+	mcc, mnc := fieldMCC(served, roamingEvent), fieldMNC(served, roamingEvent)
 	roaming := fieldRoamingFlag(mcc, mnc)
 
 	return generator.CDRRecord{
@@ -123,7 +127,7 @@ func newRecord(sequence int, subscribers []subscriber) generator.CDRRecord {
 		IngestTime:      fieldIngestTime(start),
 		SourceFile:      fieldSourceFile(entity, start),
 		RoamingFlag:     roaming,
-		PartnerPLMN:     fieldPartnerPLMN(roaming, mcc, mnc),
+		PartnerPLMN:     fieldPartnerPLMN(roaming),
 	}
 }
 
@@ -160,9 +164,24 @@ func fieldDurationSec(recordType string) int {
 	}
 	return 60
 }
-func fieldCauseForTerm() string       { return "NORMAL_RELEASE" }
-func fieldMCC(s subscriber) string    { return s.mcc }
-func fieldMNC(s subscriber) string    { return s.mnc }
+func fieldCauseForTerm() string { return "NORMAL_RELEASE" }
+func fieldIsRoamingEvent(recordType string, s subscriber) bool {
+	return s.profile == "roamer" && (recordType == "MOC" || recordType == "MTC")
+}
+func fieldMCC(s subscriber, roaming bool) string {
+	if roaming {
+		return fieldPartnerMCC()
+	}
+	return s.mcc
+}
+func fieldMNC(s subscriber, roaming bool) string {
+	if roaming {
+		return fieldPartnerMNC()
+	}
+	return s.mnc
+}
+func fieldPartnerMCC() string         { return "262" }
+func fieldPartnerMNC() string         { return "01" }
 func fieldLAC(sequence int) string    { return strconv.Itoa(1000 + sequence%50000) }
 func fieldCellID(sequence int) string { return fmt.Sprintf("0x%04X", 0x1000+sequence%0xEFFF) }
 func fieldRecordingEntity(sequence int) string {
@@ -182,9 +201,9 @@ func fieldSourceFile(entity string, start time.Time) string {
 	return fmt.Sprintf("%s_%s.csv", entity, start.Format("20060102_15"))
 }
 func fieldRoamingFlag(mcc, mnc string) bool { return mcc != "250" || mnc != "01" }
-func fieldPartnerPLMN(roaming bool, mcc, mnc string) string {
+func fieldPartnerPLMN(roaming bool) string {
 	if !roaming {
 		return ""
 	}
-	return mcc + mnc
+	return fieldPartnerMCC() + fieldPartnerMNC()
 }
